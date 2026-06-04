@@ -37,20 +37,43 @@ export function Account() {
 
 function LoggedIn() {
   const { user, logout, refresh } = useAuth();
-  const [accountant, setAccountant] = useState(user?.accountant_email ?? "");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    accountant_email: user?.accountant_email ?? "",
+    company_name: user?.company_name ?? "",
+    vat_number: user?.vat_number ?? "",
+    kvk_number: user?.kvk_number ?? "",
+    street: user?.street ?? "",
+    postal_code: user?.postal_code ?? "",
+    city: user?.city ?? "",
+    country: user?.country ?? "NL",
+  });
 
   const { data: mine } = useQuery({
     queryKey: ["receipts", "mine"],
-    queryFn: () => api.listReceipts(true),
+    queryFn: api.listReceipts,
   });
+
+  function set(field: keyof typeof form) {
+    return (e: React.ChangeEvent<HTMLInputElement>) =>
+      setForm((f) => ({ ...f, [field]: e.target.value }));
+  }
 
   async function save() {
     setBusy(true);
     setMsg(null);
     try {
-      await api.updateMe({ accountant_email: accountant || null });
+      await api.updateMe({
+        accountant_email: form.accountant_email || null,
+        company_name: form.company_name || null,
+        vat_number: form.vat_number || null,
+        kvk_number: form.kvk_number || null,
+        street: form.street || null,
+        postal_code: form.postal_code || null,
+        city: form.city || null,
+        country: form.country || "NL",
+      });
       await refresh();
       setMsg("Saved.");
     } catch (e) {
@@ -80,11 +103,33 @@ function LoggedIn() {
             label="Accountant email (used by 'Send to accountant')"
             type="email"
             placeholder="accountant@demo-accounting.nl"
-            value={accountant}
-            onChange={(e) => setAccountant(e.target.value)}
+            value={form.accountant_email}
+            onChange={set("accountant_email")}
           />
+
+          <div className="border-t border-gray-100 pt-3">
+            <h4 className="text-sm font-semibold text-gray-900">Business details</h4>
+            <p className="mb-3 text-xs text-gray-500">
+              These appear as the buyer on the e-invoice (UBL/JSON) you send to your
+              accountant — your company name, BTW &amp; KVK number, and address.
+            </p>
+            <div className="space-y-3">
+              <Input label="Company name" value={form.company_name} onChange={set("company_name")} />
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="VAT / BTW number" value={form.vat_number} onChange={set("vat_number")} />
+                <Input label="KVK number" value={form.kvk_number} onChange={set("kvk_number")} />
+              </div>
+              <Input label="Street + number" value={form.street} onChange={set("street")} />
+              <div className="grid grid-cols-3 gap-3">
+                <Input label="Postal code" value={form.postal_code} onChange={set("postal_code")} />
+                <Input label="City" value={form.city} onChange={set("city")} />
+                <Input label="Country" value={form.country} onChange={set("country")} />
+              </div>
+            </div>
+          </div>
+
           <Button onClick={save} disabled={busy}>
-            Save accountant
+            Save details
           </Button>
           {msg && <p className="text-sm text-green-700">{msg}</p>}
         </div>

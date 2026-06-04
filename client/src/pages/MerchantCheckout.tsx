@@ -12,6 +12,7 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Spinner } from "../components/Spinner";
 import { euro, vatPct } from "../lib/format";
+import { addRecentReceipt } from "../lib/storage-service";
 
 const MERCHANT_KEY = "bouwmaat";
 
@@ -28,7 +29,9 @@ export function MerchantCheckout() {
     setErr(null);
     setBusy(true);
     try {
-      setReceipt(await api.checkout(MERCHANT_KEY, "NFC"));
+      const r = await api.checkout(MERCHANT_KEY, "NFC");
+      addRecentReceipt(r.invoice_id);
+      setReceipt(r);
     } catch (e) {
       setErr(api.apiError(e));
     } finally {

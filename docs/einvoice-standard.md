@@ -35,6 +35,11 @@ rate, and net + VAT = gross. Because the receipt is already paid at the till, we
 `PrepaidAmount = gross` and `PayableAmount = 0.00`, which also avoids the "payment terms required when
 an amount is due" rule.
 
+**Buyer identity.** The buyer party is filled from the logged-in account's **business details**
+(company name, BTW/VAT number, KVK registration, and postal address), captured on the account page.
+That is why structured export requires an account — and why the resulting UBL/JSON carries a real,
+importable buyer, not just a name.
+
 **Compliance gate.** EN 16931 requires the seller to be identifiable (BR-CO-26). A receipt without a
 seller VAT number therefore cannot become a valid e-invoice — `ubl.py` raises `UblComplianceError`
 and the API returns **HTTP 422** with a clear message, rather than emitting an invalid document.

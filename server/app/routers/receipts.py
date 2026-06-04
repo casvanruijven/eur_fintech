@@ -24,8 +24,8 @@ from app.auth import CurrentUser, OptionalUser
 from app.database import get_session
 from app.einvoice import receipt_to_einvoice_dict
 from app.email import send_receipt_email
-from app.models import EmailRequest, Receipt, ReceiptOut, ReceiptStatus, User
-from app.pdf import receipt_filename, render_pdf, render_png
+from app.models import CreditNote, EmailRequest, Receipt, ReceiptOut, ReceiptStatus, User
+from app.pdf import download_headers, receipt_filename, render_pdf, render_png
 from app.ubl import UblComplianceError, render_ubl
 
 router = APIRouter(prefix="/api/receipts", tags=["receipts"])
@@ -57,21 +57,44 @@ def _ubl_or_422(receipt: Receipt, user: User) -> bytes:
 # Public — view + human-readable downloads (no login)
 # --------------------------------------------------------------------------- #
 @router.get("", response_model=list[ReceiptOut])
-async def list_receipts(
-    session: SessionDep, user: OptionalUser, mine: bool = False
-) -> list[Receipt]:
-    """List receipts. The merchant dashboard lists all; ``?mine=true`` (logged in)
-    lists only the caller's linked receipts (their expenses)."""
-    query = select(Receipt).order_by(Receipt.created_at.desc())
-    if mine and user is not None:
-        query = query.where(Receipt.user_id == user.id)
-    result = await session.execute(query)
+async def list_receipts(user: CurrentUser, session: SessionDep) -> list[Receipt]:
+    """List **only the caller's own** receipts (privacy: never expose other users'
+    receipts). Requires an account; receipts link to the account on checkout (when
+    logged in) and on view/export/email/refund."""
+    result = await session.execute(
+        select(Receipt)
+        .where(Receipt.user_id == user.id)
+        .order_by(Receipt.created_at.desc())
+    )
     return list(result.scalars().all())
 
 
-@router.get("/{invoice_id}", response_model=ReceiptOut)
-async def get_receipt(invoice_id: str, session: SessionDep) -> Receipt:
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_receipt(invoice_id: str, user: CurrentUser, session: SessionDep) -> Response:
+    """Delete a receipt from the caller's account.
+
+    Owner-only: you can only delete a receipt linked to *your* account (404 hides
+    other users' receipts). A linked credit note is removed with it. The original
+    public receipt is the user's own expense record, so deleting it is their call.
+    """
     receipt = await _get_receipt(invoice_id, session)
+    if receipt.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Receipt not found")
+    if receipt.credit_note_id:
+        cn = await session.get(CreditNote, receipt.credit_note_id)
+        if cn is not None:
+            await session.delete(cn)  # remove the FK child first
+    await session.delete(receipt)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{invoice_id}", response_model=ReceiptOut)
+async def get_receipt(invoice_id: str, user: OptionalUser, session: SessionDep) -> Receipt:
+    receipt = await _get_receipt(invoice_id, session)
+    # A logged-in viewer claims an ownerless receipt (capability URL → "it's mine"),
+    # so it shows up under their account.
+    if user is not None:
+        _link_to_user(receipt, user)
     # Demo telemetry: first open flips GENERATED -> VIEWED. Never downgrade SENT/REFUNDED.
     if receipt.status == ReceiptStatus.GENERATED.value:
         receipt.status = ReceiptStatus.VIEWED.value
@@ -84,7 +107,7 @@ async def download_pdf(invoice_id: str, session: SessionDep) -> Response:
     return Response(
         content=render_pdf(receipt),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "pdf")}"'},
+        headers=download_headers(receipt_filename(receipt, "pdf")),
     )
 
 
@@ -94,7 +117,7 @@ async def download_png(invoice_id: str, session: SessionDep) -> Response:
     return Response(
         content=render_png(receipt),
         media_type="image/png",
-        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "png")}"'},
+        headers=download_headers(receipt_filename(receipt, "png")),
     )
 
 
@@ -105,11 +128,11 @@ async def download_png(invoice_id: str, session: SessionDep) -> Response:
 async def download_json(invoice_id: str, user: CurrentUser, session: SessionDep) -> Response:
     receipt = await _get_receipt(invoice_id, session)
     _link_to_user(receipt, user)
-    body = json.dumps(receipt_to_einvoice_dict(receipt), indent=2)
+    body = json.dumps(receipt_to_einvoice_dict(receipt, buyer=user), indent=2)
     return Response(
         content=body,
         media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "json")}"'},
+        headers=download_headers(receipt_filename(receipt, "json")),
     )
 
 
@@ -123,7 +146,7 @@ async def download_ubl(invoice_id: str, user: CurrentUser, session: SessionDep) 
     return Response(
         content=content,
         media_type="application/xml",
-        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "xml")}"'},
+        headers=download_headers(receipt_filename(receipt, "xml")),
     )
 
 
@@ -153,7 +176,16 @@ async def _email_receipt(invoice_id: str, to: str, user: User, session: AsyncSes
 async def email_to_self(
     invoice_id: str, body: EmailRequest, user: CurrentUser, session: SessionDep
 ) -> dict:
-    """Email the receipt (PDF + UBL) to the logged-in user (or an override address)."""
+    """Email the receipt (PDF + UBL) to the logged-in user (or an override address).
+
+    Refuses to send twice: once a receipt has been emailed to the user it can't be
+    re-sent (prevents duplicate copies in their inbox / bookkeeping)."""
+    receipt = await _get_receipt(invoice_id, session)
+    if receipt.sent_to_user_email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This receipt was already emailed to {receipt.sent_to_user_email}.",
+        )
     to = body.to or user.email
     return await _email_receipt(invoice_id, to, user, session)
 
@@ -162,10 +194,19 @@ async def email_to_self(
 async def send_to_accountant(
     invoice_id: str, user: CurrentUser, session: SessionDep
 ) -> dict:
-    """Forward the receipt (PDF + UBL) to the accountant configured on the account."""
+    """Forward the receipt (PDF + UBL) to the accountant configured on the account.
+
+    Refuses to send twice: once a receipt has been sent to the accountant it can't
+    be sent again (a single, auditable copy in their books)."""
     if not user.accountant_email:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "No accountant email on file — add one on your account page.",
+        )
+    receipt = await _get_receipt(invoice_id, session)
+    if receipt.sent_to_accountant_email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This receipt was already sent to {receipt.sent_to_accountant_email}.",
         )
     return await _email_receipt(invoice_id, user.accountant_email, user, session)

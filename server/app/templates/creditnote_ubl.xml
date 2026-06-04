@@ -51,12 +51,24 @@
         <cbc:Name>{{ buyer_name }}</cbc:Name>
       </cac:PartyName>
       <cac:PostalAddress>
+        {% if buyer_street %}<cbc:StreetName>{{ buyer_street }}</cbc:StreetName>{% endif %}
+        {% if buyer_city %}<cbc:CityName>{{ buyer_city }}</cbc:CityName>{% endif %}
+        {% if buyer_postal_code %}<cbc:PostalZone>{{ buyer_postal_code }}</cbc:PostalZone>{% endif %}
         <cac:Country>
           <cbc:IdentificationCode>{{ buyer_country }}</cbc:IdentificationCode>
         </cac:Country>
       </cac:PostalAddress>
+      {% if buyer_vat %}
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>{{ buyer_vat }}</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+      {% endif %}
       <cac:PartyLegalEntity>
         <cbc:RegistrationName>{{ buyer_name }}</cbc:RegistrationName>
+        {% if buyer_kvk %}<cbc:CompanyID>{{ buyer_kvk }}</cbc:CompanyID>{% endif %}
       </cac:PartyLegalEntity>
     </cac:Party>
   </cac:AccountingCustomerParty>

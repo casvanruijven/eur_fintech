@@ -40,6 +40,14 @@ async def run() -> None:
             last_name="ZZP'er",
             password_hash=hash_password(DEMO_PASSWORD),
             accountant_email=DEMO_ACCOUNTANT,
+            # Business identity → fills the EN 16931 buyer party in UBL/JSON exports.
+            company_name="Demo ZZP Diensten",
+            vat_number="NL002233445B01",
+            kvk_number="87654321",
+            street="Coolsingel 1",
+            postal_code="3011 AD",
+            city="Rotterdam",
+            country="NL",
         )
         session.add(user)
 

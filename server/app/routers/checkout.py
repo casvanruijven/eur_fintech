@@ -15,6 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import OptionalUser
 from app.database import get_session
 from app.einvoice import basket_to_receipt, q
 from app.models import (
@@ -87,12 +88,13 @@ async def demo_baskets() -> dict:
 
 
 @router.post("", response_model=ReceiptOut, status_code=status.HTTP_201_CREATED)
-async def checkout(body: CheckoutRequest, session: SessionDep) -> Receipt:
+async def checkout(body: CheckoutRequest, user: OptionalUser, session: SessionDep) -> Receipt:
     """Turn a merchant basket into a structured receipt (the one-click moment).
 
     Mints a human-readable ``invoice_id``, maps the basket into an EN 16931-shaped
     Receipt, and returns it with a ``delivery_url`` (what an NFC tile / online link
-    would point at).
+    would point at). If the caller is logged in, the receipt is linked to their
+    account so it appears under their receipts.
     """
     merchant = MERCHANTS.get(body.merchant_key)
     if merchant is None:
@@ -100,6 +102,8 @@ async def checkout(body: CheckoutRequest, session: SessionDep) -> Receipt:
 
     invoice_id = await next_invoice_id(session)
     receipt = basket_to_receipt(merchant, merchant["basket"], body.channel, invoice_id)
+    if user is not None:
+        receipt.user_id = user.id
     session.add(receipt)
     await session.flush()  # commit happens in get_session on success
     return receipt

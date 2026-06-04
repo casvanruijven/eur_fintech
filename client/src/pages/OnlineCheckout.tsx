@@ -11,6 +11,7 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { Spinner } from "../components/Spinner";
 import { euro, vatPct } from "../lib/format";
+import { addRecentReceipt } from "../lib/storage-service";
 
 const MERCHANT_KEY = "shell";
 
@@ -27,7 +28,9 @@ export function OnlineCheckout() {
     setErr(null);
     setBusy(true);
     try {
-      setReceipt(await api.checkout(MERCHANT_KEY, "ONLINE_LINK"));
+      const r = await api.checkout(MERCHANT_KEY, "ONLINE_LINK");
+      addRecentReceipt(r.invoice_id);
+      setReceipt(r);
     } catch (e) {
       setErr(api.apiError(e));
     } finally {

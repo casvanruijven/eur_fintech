@@ -100,7 +100,18 @@ export interface DemoBasket {
   preview_total: string;
 }
 
-export interface User {
+// Business identity that ends up on the e-invoice (UBL/JSON buyer party).
+export interface BusinessDetails {
+  company_name: string | null;
+  vat_number: string | null;
+  kvk_number: string | null;
+  street: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country: string;
+}
+
+export interface User extends BusinessDetails {
   id: string;
   email: string;
   first_name: string;
@@ -136,11 +147,11 @@ export async function getMe(): Promise<User> {
   return data;
 }
 
-export async function updateMe(body: {
-  first_name?: string;
-  last_name?: string;
-  accountant_email?: string | null;
-}): Promise<User> {
+export async function updateMe(body: Partial<{
+  first_name: string;
+  last_name: string;
+  accountant_email: string | null;
+} & BusinessDetails>): Promise<User> {
   const { data } = await http.put<User>("/me", body);
   return data;
 }
@@ -157,14 +168,27 @@ export async function checkout(merchant_key: string, channel: Channel): Promise<
 }
 
 // ---- Receipts ----
-export async function listReceipts(mine = false): Promise<Receipt[]> {
-  const { data } = await http.get<Receipt[]>("/receipts", { params: mine ? { mine: true } : {} });
+// Returns ONLY the logged-in account's receipts (401 if not logged in). Privacy:
+// a user never sees another user's receipts.
+export async function listReceipts(): Promise<Receipt[]> {
+  const { data } = await http.get<Receipt[]>("/receipts");
   return data;
 }
 
 export async function getReceipt(id: string): Promise<Receipt> {
   const { data } = await http.get<Receipt>(`/receipts/${id}`);
   return data;
+}
+
+// Delete a receipt from your account (owner-only; also removes a linked credit note).
+// A 404 means it's already gone — that's the desired end state, so treat it as success.
+export async function deleteReceipt(id: string): Promise<void> {
+  try {
+    await http.delete(`/receipts/${id}`);
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response?.status === 404) return;
+    throw err;
+  }
 }
 
 export async function emailReceiptToSelf(id: string): Promise<{ detail: string }> {
@@ -181,7 +205,7 @@ export async function sendToAccountant(id: string): Promise<{ detail: string }> 
 export async function refundReceipt(
   id: string,
   body: { full?: boolean; line_ids?: number[]; reason?: string }
-): Promise<{ credit_note: CreditNote; warning: string | null }> {
+): Promise<{ credit_note: CreditNote; warning: string | null; credit_note_emailed_to: string | null }> {
   const { data } = await http.post(`/receipts/${id}/refund`, body);
   return data;
 }

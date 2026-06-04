@@ -10,12 +10,13 @@ import {
   PiHouse,
 } from "react-icons/pi";
 import { useAuth } from "../auth";
+import logoUrl from "../assets/zzp-logo.svg";
 
 const NAV = [
   { to: "/", label: "Home", icon: PiHouse, end: true },
   { to: "/merchant", label: "Merchant", icon: PiStorefront, end: false },
   { to: "/online-checkout", label: "Online", icon: PiGlobeSimple, end: false },
-  { to: "/merchant/receipts", label: "Receipts", icon: PiReceipt, end: false },
+  { to: "/merchant/receipts", label: "My receipts", icon: PiReceipt, end: false },
 ];
 
 export function Layout() {
@@ -30,8 +31,14 @@ export function Layout() {
     <div className="min-h-full">
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-2 px-4 py-3">
-          <Link to="/" className="text-xl font-bold tracking-tight text-brand">
-            ZZPay
+          <Link
+            to="/"
+            className="flex items-center gap-2 text-xl font-bold tracking-tight text-brand"
+          >
+            {/* translate-y nudges the mark to the wordmark's optical centre (the
+                tall caps sit high in the line box, so a box-centred mark reads high). */}
+            <img src={logoUrl} alt="ZZPay logo" className="h-7 w-7 shrink-0 translate-y-[2px]" />
+            <span>ZZPay</span>
           </Link>
           <nav className="flex items-center gap-1 overflow-x-auto">
             {NAV.map(({ to, label, icon: Icon, end }) => (

@@ -19,7 +19,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import CurrentUser
+from app.auth import CurrentUser, OptionalUser
 from app.database import get_session
 from app.einvoice import credit_from_receipt, credit_note_to_einvoice_dict
 from app.email import send_credit_note_email
@@ -36,6 +36,7 @@ from app.models import (
 )
 from app.pdf import (
     credit_note_filename,
+    download_headers,
     render_credit_note_pdf,
     render_credit_note_png,
 )
@@ -63,9 +64,14 @@ async def _get_credit_note(credit_note_id: str, session: AsyncSession) -> Credit
 @router.post("/receipts/{invoice_id}/refund", response_model=RefundResponse,
              status_code=status.HTTP_201_CREATED)
 async def create_refund(
-    invoice_id: str, body: RefundRequest, session: SessionDep
+    invoice_id: str, body: RefundRequest, user: OptionalUser, session: SessionDep
 ) -> RefundResponse:
-    """Create a linked credit note for the chosen line(s). Original receipt untouched."""
+    """Create a linked credit note for the chosen line(s). Original receipt untouched.
+
+    If the caller is a logged-in account holder with an accountant configured, the
+    new credit note is **automatically emailed to that accountant** (PDF + UBL), so
+    the correction reaches the books without a second manual step.
+    """
     receipt = await _get_receipt(invoice_id, session)
     if receipt.status == ReceiptStatus.REFUNDED.value:
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -74,8 +80,8 @@ async def create_refund(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "Specify line_ids to refund, or set full=true.")
 
-    # Read the pre-refund state to decide whether to warn about prior sending.
-    already_sent = receipt.status == ReceiptStatus.SENT.value
+    # Whether the original had already gone to the accountant (for the warning).
+    was_sent_to_accountant = bool(receipt.sent_to_accountant_email)
 
     cn_id = await next_credit_note_id(session)
     try:
@@ -85,19 +91,40 @@ async def create_refund(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
+    if user is not None:
+        cn.user_id = user.id
+        if receipt.user_id is None:
+            receipt.user_id = user.id
+
     receipt.status = ReceiptStatus.REFUNDED.value
     receipt.credit_note_id = cn_id
+
+    # Auto-forward the credit note to the accountant (logged-in + configured).
+    emailed_to = None
+    if user is not None and user.accountant_email:
+        try:
+            await send_credit_note_email(user.accountant_email, cn, receipt, buyer=user)
+        except UblComplianceError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        cn.status = CreditNoteStatus.SENT.value
+        cn.sent_to_accountant_email = user.accountant_email
+        cn.sent_at = datetime.now(timezone.utc)
+        emailed_to = user.accountant_email
+
     session.add(cn)
     await session.flush()
 
     warning = None
-    if already_sent:
+    if was_sent_to_accountant:
         warning = (
             "This receipt was already sent to your accountant. ZZPay created a "
             "linked credit note so the correction remains auditable."
         )
-    return RefundResponse(credit_note=CreditNoteOut.model_validate(cn, from_attributes=True),
-                          warning=warning)
+    return RefundResponse(
+        credit_note=CreditNoteOut.model_validate(cn, from_attributes=True),
+        warning=warning,
+        credit_note_emailed_to=emailed_to,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -115,7 +142,7 @@ async def credit_note_pdf(credit_note_id: str, session: SessionDep) -> Response:
     return Response(
         content=render_credit_note_pdf(cn, original),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{credit_note_filename(cn, "pdf")}"'},
+        headers=download_headers(credit_note_filename(cn, "pdf")),
     )
 
 
@@ -126,7 +153,7 @@ async def credit_note_png(credit_note_id: str, session: SessionDep) -> Response:
     return Response(
         content=render_credit_note_png(cn, original),
         media_type="image/png",
-        headers={"Content-Disposition": f'attachment; filename="{credit_note_filename(cn, "png")}"'},
+        headers=download_headers(credit_note_filename(cn, "png")),
     )
 
 
@@ -135,11 +162,11 @@ async def credit_note_json(
     credit_note_id: str, user: CurrentUser, session: SessionDep
 ) -> Response:
     cn = await _get_credit_note(credit_note_id, session)
-    body = json.dumps(credit_note_to_einvoice_dict(cn), indent=2)
+    body = json.dumps(credit_note_to_einvoice_dict(cn, buyer=user), indent=2)
     return Response(
         content=body,
         media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{credit_note_filename(cn, "json")}"'},
+        headers=download_headers(credit_note_filename(cn, "json")),
     )
 
 
@@ -156,7 +183,7 @@ async def credit_note_ubl(
     return Response(
         content=content,
         media_type="application/xml",
-        headers={"Content-Disposition": f'attachment; filename="{credit_note_filename(cn, "xml")}"'},
+        headers=download_headers(credit_note_filename(cn, "xml")),
     )
 
 
@@ -172,8 +199,14 @@ async def email_credit_note(
         if not user.accountant_email:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "No accountant email on file — add one on your account page.")
+        if cn.sent_to_accountant_email:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"This credit note was already sent to {cn.sent_to_accountant_email}.")
         to = body.to or user.accountant_email
     else:
+        if cn.sent_to_user_email:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"This credit note was already emailed to {cn.sent_to_user_email}.")
         to = body.to or user.email
 
     try:

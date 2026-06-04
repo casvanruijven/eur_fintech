@@ -131,3 +131,13 @@ def receipt_filename(receipt: Receipt, ext: str) -> str:
 
 def credit_note_filename(cn: CreditNote, ext: str) -> str:
     return f"zzpay-{cn.credit_note_id}.{ext}"
+
+
+def download_headers(filename: str) -> dict:
+    """Attachment headers for an export. ``no-store`` is important: exports are
+    rendered live from the current data, so after a refund/email the browser must
+    re-fetch a fresh document instead of serving a stale cached copy."""
+    return {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }

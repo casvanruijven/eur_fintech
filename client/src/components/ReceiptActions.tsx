@@ -85,13 +85,34 @@ export function ReceiptActions({
         {loggedIn ? (
           <>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" disabled={busy !== null} onClick={emailSelf}>
-                <PiEnvelopeSimple /> Email to myself
+              <Button
+                variant="secondary"
+                disabled={busy !== null || !!receipt.sent_to_user_email}
+                title={receipt.sent_to_user_email ? "Already emailed to you" : undefined}
+                onClick={emailSelf}
+              >
+                <PiEnvelopeSimple />{" "}
+                {receipt.sent_to_user_email ? "Emailed to you" : "Email to myself"}
               </Button>
-              <Button disabled={busy !== null} onClick={emailAccountant}>
-                <PiPaperPlaneTilt /> Send to accountant (PDF + UBL)
+              <Button
+                disabled={busy !== null || !!receipt.sent_to_accountant_email}
+                title={receipt.sent_to_accountant_email ? "Already sent to accountant" : undefined}
+                onClick={emailAccountant}
+              >
+                <PiPaperPlaneTilt />{" "}
+                {receipt.sent_to_accountant_email
+                  ? "Sent to accountant"
+                  : "Send to accountant (PDF + UBL)"}
               </Button>
             </div>
+            {(receipt.sent_to_user_email || receipt.sent_to_accountant_email) && (
+              <p className="mt-2 text-xs text-gray-500">
+                Already sent{receipt.sent_to_accountant_email
+                  ? ` to ${receipt.sent_to_accountant_email}`
+                  : ` to ${receipt.sent_to_user_email}`}
+                . A receipt can only be sent once to each recipient.
+              </p>
+            )}
             {!user?.accountant_email && (
               <p className="mt-2 text-xs text-gray-400">
                 Set an accountant email on your{" "}
@@ -146,6 +167,11 @@ function CreditNoteSection({ creditNoteId, loggedIn }: { creditNoteId: string; l
           )}
         </div>
         {cn && <div className="mt-1 text-gray-500">Reason: {cn.reason}</div>}
+        {cn?.sent_to_accountant_email && (
+          <div className="mt-1 text-green-700">
+            Automatically emailed to accountant {cn.sent_to_accountant_email}.
+          </div>
+        )}
       </div>
       <div className="mt-3">
         <ExportButtons

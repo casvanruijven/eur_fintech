@@ -71,6 +71,18 @@ class User(SQLModel, table=True):
     password_hash: str
     # Where receipts should be forwarded. Configured on the account page.
     accountant_email: str | None = Field(default=None)
+
+    # Business / billing identity — the fields that normally appear on a business
+    # invoice. They become the EN 16931 *buyer party* in the UBL + JSON exports, so
+    # the structured e-invoice carries the ZZP'er's real company details.
+    company_name: str | None = Field(default=None)
+    vat_number: str | None = Field(default=None)      # buyer BTW-nummer (BT-48)
+    kvk_number: str | None = Field(default=None)      # buyer registration id (BT-47)
+    street: str | None = Field(default=None)          # BT-50
+    postal_code: str | None = Field(default=None)     # BT-53
+    city: str | None = Field(default=None)            # BT-52
+    country: str = Field(default="NL")                # BT-55
+
     created_at: datetime = Field(
         default_factory=_utcnow, sa_type=DateTime(timezone=True)
     )
@@ -188,7 +200,19 @@ async def next_credit_note_id(session: AsyncSession, year: int | None = None) ->
 # --------------------------------------------------------------------------- #
 # Schemas — Users (the optional account)
 # --------------------------------------------------------------------------- #
-class UserCreate(BaseModel):
+class BusinessDetails(BaseModel):
+    """The buyer's business identity (shared by create/update/out)."""
+
+    company_name: str | None = None
+    vat_number: str | None = None
+    kvk_number: str | None = None
+    street: str | None = None
+    postal_code: str | None = None
+    city: str | None = None
+    country: str = "NL"
+
+
+class UserCreate(BusinessDetails):
     email: EmailStr
     first_name: str
     last_name: str
@@ -200,9 +224,16 @@ class UserUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     accountant_email: EmailStr | None = None
+    company_name: str | None = None
+    vat_number: str | None = None
+    kvk_number: str | None = None
+    street: str | None = None
+    postal_code: str | None = None
+    city: str | None = None
+    country: str | None = None
 
 
-class UserOut(BaseModel):
+class UserOut(BusinessDetails):
     id: UUID
     email: EmailStr
     first_name: str
@@ -289,6 +320,8 @@ class RefundResponse(BaseModel):
     credit_note: CreditNoteOut
     # Set when the original receipt had already been emailed to an accountant.
     warning: str | None = None
+    # Set when the new credit note was auto-emailed to the accountant.
+    credit_note_emailed_to: str | None = None
 
 
 # --------------------------------------------------------------------------- #

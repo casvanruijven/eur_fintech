@@ -40,6 +40,13 @@ async def register(body: UserCreate, session: SessionDep) -> User:
         last_name=body.last_name,
         password_hash=hash_password(body.password),
         accountant_email=body.accountant_email,
+        company_name=body.company_name,
+        vat_number=body.vat_number,
+        kvk_number=body.kvk_number,
+        street=body.street,
+        postal_code=body.postal_code,
+        city=body.city,
+        country=body.country,
     )
     session.add(user)
     await session.flush()  # populate generated fields before the response

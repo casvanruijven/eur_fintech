@@ -31,6 +31,10 @@ async def _register_and_login(client, email="ann@zzp.nl", accountant=None):
         body["accountant_email"] = accountant
     r = await client.post("/api/register", json=body)
     assert r.status_code == 201, r.text
+    await _login(client, email)
+
+
+async def _login(client, email="ann@zzp.nl"):
     # OAuth2 form login (username = email) — sets the zzpay_token cookie on the client.
     r = await client.post("/api/login", data={"username": email, "password": "supersecret"})
     assert r.status_code == 200, r.text
@@ -163,6 +167,61 @@ async def test_refund_creates_linked_credit_note(client):
                               json={"full": True})).status_code == 409
 
 
+async def test_refund_preserves_original_amounts(client):
+    """The original receipt's lines/totals must NOT change on refund — only its
+    status flips to REFUNDED and it gains a link to the credit note."""
+    receipt = await _checkout(client)
+    iid = receipt["invoice_id"]
+    kit = next(l for l in receipt["invoice_lines"] if l["description"] == "Kit")
+
+    r = await client.post(f"/api/receipts/{iid}/refund", json={"line_ids": [kit["id"]]})
+    assert r.status_code == 201
+
+    after = (await client.get(f"/api/receipts/{iid}")).json()
+    assert after["status"] == "REFUNDED"
+    assert after["credit_note_id"]
+    # Financial content is untouched.
+    assert after["invoice_lines"] == receipt["invoice_lines"]
+    assert Decimal(str(after["payable_amount"])) == Decimal(str(receipt["payable_amount"]))
+    assert Decimal(str(after["tax_total"])) == Decimal(str(receipt["tax_total"]))
+
+
+async def test_exports_are_not_cached(client):
+    """Exports render live, so they must not be cached (else a stale PNG/PDF shows
+    after a refund/email)."""
+    receipt = await _checkout(client)
+    r = await client.get(f"/api/receipts/{receipt['invoice_id']}/pdf")
+    assert r.headers.get("cache-control") == "no-store"
+
+
+async def test_delete_receipt_owner_only(client):
+    await _register_and_login(client, email="owner@zzp.nl")
+    receipt = await _checkout(client)  # linked to owner
+    iid = receipt["invoice_id"]
+
+    # A different account cannot delete it (404 hides ownership) and it survives.
+    await client.post("/api/logout")
+    await _register_and_login(client, email="intruder@zzp.nl")
+    assert (await client.delete(f"/api/receipts/{iid}")).status_code == 404
+    assert (await client.get(f"/api/receipts/{iid}")).status_code == 200
+
+    # The owner can delete it; afterwards it's gone.
+    await client.post("/api/logout")
+    await _login(client, "owner@zzp.nl")
+    assert (await client.delete(f"/api/receipts/{iid}")).status_code == 204
+    assert (await client.get(f"/api/receipts/{iid}")).status_code == 404
+
+
+async def test_delete_receipt_removes_linked_credit_note(client):
+    await _register_and_login(client, email="cleanup@zzp.nl")
+    receipt = await _checkout(client)
+    iid = receipt["invoice_id"]
+    cn_id = (await client.post(f"/api/receipts/{iid}/refund",
+                               json={"full": True})).json()["credit_note"]["credit_note_id"]
+    assert (await client.delete(f"/api/receipts/{iid}")).status_code == 204
+    assert (await client.get(f"/api/credit-notes/{cn_id}")).status_code == 404
+
+
 async def test_credit_note_ubl_has_billing_reference(client):
     receipt = await _checkout(client)
     iid = receipt["invoice_id"]
@@ -211,3 +270,73 @@ async def test_send_to_accountant_ok(client):
     after = (await client.get(f"/api/receipts/{iid}")).json()
     assert after["sent_to_accountant_email"] == "boekhouder@demo-accounting.nl"
     assert after["status"] == "SENT"
+
+
+async def test_cannot_send_twice(client):
+    receipt = await _checkout(client)
+    iid = receipt["invoice_id"]
+    await _register_and_login(client, email="once@zzp.nl",
+                              accountant="boekhouder@demo-accounting.nl")
+    assert (await client.post(f"/api/receipts/{iid}/send-to-accountant")).status_code == 200
+    # Second send to the accountant is refused (no duplicate in the books).
+    assert (await client.post(f"/api/receipts/{iid}/send-to-accountant")).status_code == 409
+    # Same for email-to-self.
+    assert (await client.post(f"/api/receipts/{iid}/email", json={})).status_code == 200
+    assert (await client.post(f"/api/receipts/{iid}/email", json={})).status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# Privacy: receipts list is scoped to the account
+# --------------------------------------------------------------------------- #
+async def test_receipts_list_requires_login(client):
+    await _checkout(client)
+    assert (await client.get("/api/receipts")).status_code == 401
+
+
+async def test_receipts_list_is_scoped_to_user(client):
+    # User A checks out while logged in -> the receipt is theirs.
+    await _register_and_login(client, email="a@zzp.nl")
+    a = await _checkout(client)
+    mine_a = (await client.get("/api/receipts")).json()
+    assert any(r["invoice_id"] == a["invoice_id"] for r in mine_a)
+
+    # User B logs in on the same browser -> must NOT see A's receipt.
+    await client.post("/api/logout")
+    await _register_and_login(client, email="b@zzp.nl")
+    mine_b = (await client.get("/api/receipts")).json()
+    assert all(r["invoice_id"] != a["invoice_id"] for r in mine_b)
+
+
+# --------------------------------------------------------------------------- #
+# Refund auto-emails the credit note to the accountant
+# --------------------------------------------------------------------------- #
+async def test_refund_auto_emails_accountant(client):
+    await _register_and_login(client, email="refund@zzp.nl",
+                              accountant="boekhouder@demo-accounting.nl")
+    receipt = await _checkout(client)  # linked to the logged-in user
+    r = await client.post(f"/api/receipts/{receipt['invoice_id']}/refund",
+                          json={"full": True})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["credit_note_emailed_to"] == "boekhouder@demo-accounting.nl"
+    cn = body["credit_note"]
+    assert cn["status"] == "SENT"
+    assert cn["sent_to_accountant_email"] == "boekhouder@demo-accounting.nl"
+
+
+async def test_business_details_in_ubl(client):
+    await _register_and_login(client, email="biz@zzp.nl")
+    await client.put("/api/me", json={
+        "company_name": "Bakker Bouw BV",
+        "vat_number": "NL009988776B01",
+        "kvk_number": "12345678",
+        "street": "Coolsingel 1",
+        "city": "Rotterdam",
+        "postal_code": "3011 AD",
+    })
+    receipt = await _checkout(client)
+    xml = (await client.get(f"/api/receipts/{receipt['invoice_id']}/ubl")).text
+    assert "Bakker Bouw BV" in xml
+    assert "NL009988776B01" in xml   # buyer VAT
+    assert "12345678" in xml         # buyer KVK
+    assert "Coolsingel 1" in xml     # buyer street

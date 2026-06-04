@@ -1,6 +1,7 @@
 // Flow 3 — the public receipt page. No login, no app: opening this URL (from an
 // NFC tap or an online link) shows the receipt immediately, with export / email /
 // refund actions. This is the most important screen in the product.
+import { useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api";
@@ -8,6 +9,7 @@ import { ReceiptDocument } from "../components/ReceiptDocument";
 import { ReceiptActions } from "../components/ReceiptActions";
 import { Card } from "../components/Card";
 import { Spinner } from "../components/Spinner";
+import { addRecentReceipt } from "../lib/storage-service";
 
 export function ReceiptView() {
   const { id = "" } = useParams();
@@ -16,6 +18,12 @@ export function ReceiptView() {
     queryKey: ["receipt", id],
     queryFn: () => api.getReceipt(id),
   });
+
+  // Remember on this device so the visitor can find it again under "My receipts"
+  // even without an account.
+  useEffect(() => {
+    if (id) addRecentReceipt(id);
+  }, [id]);
 
   function refresh() {
     void queryClient.invalidateQueries({ queryKey: ["receipt", id] });

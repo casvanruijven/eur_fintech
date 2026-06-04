@@ -40,14 +40,25 @@ coding agents were used. ZZPay's pitch and the lecturer feedback shaped the scop
 | Export **JSON + EN 16931 UBL** e-invoice | Account holder | [`ubl.py`](server/app/ubl.py) |
 | **Email** to self / **send to accountant** (PDF + UBL) | Account holder | [`email.py`](server/app/email.py) |
 | **Refund → linked credit note** | Anyone | [`refunds.py`](server/app/routers/refunds.py) |
-| Optional account + browser-local preferences | Customer | [`/account`](client/src/pages/Account.tsx) |
+| **Delete a receipt** from your account | Owner | [`receipts.py`](server/app/routers/receipts.py) |
+| Optional account + business details + browser-local preferences | Customer | [`/account`](client/src/pages/Account.tsx) |
 
 ### Two-tier access model (the design spine)
 
-- **Anonymous (no login):** view the receipt, download **PDF/PNG**, request a **refund**.
+- **Anonymous (no login):** view the receipt, download **PDF/PNG**, request a **refund**. The
+  **My receipts** list shows only receipts opened on *this device* (localStorage) — never anyone
+  else's.
 - **Logged-in account holder:** additionally export **JSON/UBL** (a compliant e-invoice needs a
-  *buyer* identity), **email to self**, and **send to accountant**. The first such action **links**
-  the receipt to the account, so it appears under "my expenses".
+  *buyer* identity), **email to self**, and **send to accountant**. Receipts **link** to the account
+  (on checkout / view / export), so **My receipts** is private and account-scoped.
+
+A few rules that keep the books clean:
+- **No duplicate sends** — a receipt or credit note can be emailed only **once per recipient** (a
+  second send returns 409).
+- **Auto-forwarded credit notes** — refunding while logged in (with an accountant configured)
+  **automatically emails the linked credit note** to that accountant (PDF + UBL).
+- **Your business identity on the e-invoice** — the account page captures company name, BTW & KVK
+  number and address; these become the EN 16931 **buyer party** in the UBL/JSON exports.
 
 ## 3. Demo flows
 

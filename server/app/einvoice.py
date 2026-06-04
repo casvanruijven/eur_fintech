@@ -20,6 +20,7 @@ from app.models import (
     CreditNote,
     Receipt,
     ReceiptStatus,
+    User,
     _utcnow,
 )
 
@@ -119,10 +120,14 @@ def credit_from_receipt(
     """Build a linked CreditNote for the chosen line(s). Original receipt untouched."""
     line_ids = line_ids or []
     if full:
-        credited = list(receipt.invoice_lines)
+        source = receipt.invoice_lines
     else:
         wanted = set(line_ids)
-        credited = [l for l in receipt.invoice_lines if l["id"] in wanted]
+        source = [l for l in receipt.invoice_lines if l["id"] in wanted]
+    # Deep-copy: the credit note must own its line dicts, never share references
+    # with the original receipt (the original is immutable; this keeps them fully
+    # independent so nothing on one document can ever affect the other).
+    credited = [dict(l) for l in source]
     if not credited:
         raise ValueError("No matching lines to credit")
 
@@ -152,6 +157,27 @@ def _party(name: str, vat: str | None, address: str, country: str) -> dict:
     return party
 
 
+def _customer_party(buyer: User) -> dict:
+    """AccountingCustomerParty (JSON) built from the account's business details."""
+    name = (buyer.company_name or f"{buyer.first_name} {buyer.last_name}".strip()
+            or buyer.email)
+    party: dict = {
+        "Name": name,
+        "Email": buyer.email,
+        "PostalAddress": {
+            "StreetName": buyer.street,
+            "CityName": buyer.city,
+            "PostalZone": buyer.postal_code,
+            "Country": {"IdentificationCode": buyer.country or "NL"},
+        },
+    }
+    if buyer.vat_number:
+        party["PartyTaxScheme"] = {"CompanyID": buyer.vat_number, "TaxScheme": {"ID": "VAT"}}
+    if buyer.kvk_number:
+        party["PartyLegalEntity"] = {"CompanyID": buyer.kvk_number, "RegistrationName": name}
+    return party
+
+
 def _lines_json(lines: list[dict], key: str) -> list[dict]:
     return [
         {
@@ -166,11 +192,12 @@ def _lines_json(lines: list[dict], key: str) -> list[dict]:
     ]
 
 
-def receipt_to_einvoice_dict(receipt: Receipt) -> dict:
+def receipt_to_einvoice_dict(receipt: Receipt, buyer: User | None = None) -> dict:
     """Structured representation of the receipt (the 'machine-readable' view).
 
     This is the readable JSON twin of the EN 16931 UBL document; it uses the same
-    UBL-derived concepts but stays compact for inspection / generic ingestion.
+    UBL-derived concepts but stays compact for inspection / generic ingestion. When
+    a ``buyer`` account is provided, its business details fill the customer party.
     """
     return {
         "DocumentType": "Invoice",
@@ -183,8 +210,10 @@ def receipt_to_einvoice_dict(receipt: Receipt) -> dict:
             receipt.supplier_name, receipt.supplier_vat,
             receipt.supplier_address, receipt.supplier_country,
         ),
-        "AccountingCustomerParty": {"Name": receipt.buyer_name,
-                                    "Email": receipt.buyer_email},
+        "AccountingCustomerParty": (
+            _customer_party(buyer) if buyer is not None
+            else {"Name": receipt.buyer_name, "Email": receipt.buyer_email}
+        ),
         "InvoiceLine": _lines_json(receipt.invoice_lines, "InvoiceLine"),
         "TaxTotal": {"TaxAmount": str(receipt.tax_total)},
         "LegalMonetaryTotal": {
@@ -202,8 +231,8 @@ def receipt_to_einvoice_dict(receipt: Receipt) -> dict:
     }
 
 
-def credit_note_to_einvoice_dict(cn: CreditNote) -> dict:
-    return {
+def credit_note_to_einvoice_dict(cn: CreditNote, buyer: User | None = None) -> dict:
+    out: dict = {
         "DocumentType": "CreditNote",
         "CustomizationID": "urn:cen.eu:en16931:2017",
         "CreditNoteID": cn.credit_note_id,
@@ -223,3 +252,6 @@ def credit_note_to_einvoice_dict(cn: CreditNote) -> dict:
         "Reason": cn.reason,
         "ZZPayMeta": {"status": cn.status},
     }
+    if buyer is not None:
+        out["AccountingCustomerParty"] = _customer_party(buyer)
+    return out

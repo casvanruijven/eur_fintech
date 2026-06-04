@@ -75,6 +75,25 @@ def _tax_subtotals(lines: list[dict]) -> list[dict]:
     return subtotals
 
 
+def _buyer_party(buyer: User) -> dict:
+    """The EN 16931 buyer party, built from the account's business details.
+
+    Falls back to the personal name when no company is set; the optional VAT/KVK/
+    address fields are emitted only when present (the template guards on them).
+    """
+    name = (buyer.company_name or f"{buyer.first_name} {buyer.last_name}".strip()
+            or buyer.email)
+    return {
+        "buyer_name": name,
+        "buyer_vat": buyer.vat_number or None,
+        "buyer_kvk": buyer.kvk_number or None,
+        "buyer_street": buyer.street or None,
+        "buyer_postal_code": buyer.postal_code or None,
+        "buyer_city": buyer.city or None,
+        "buyer_country": buyer.country or "NL",
+    }
+
+
 def _common_context(buyer: User, seller_name: str, seller_vat: str | None,
                     seller_country: str) -> dict:
     if not seller_vat:
@@ -83,14 +102,12 @@ def _common_context(buyer: User, seller_name: str, seller_vat: str | None,
         raise UblComplianceError(
             "Seller VAT number is missing — required for a valid EN 16931 e-invoice."
         )
-    buyer_name = f"{buyer.first_name} {buyer.last_name}".strip() or buyer.email
     return {
         "customization_id": "urn:cen.eu:en16931:2017",
         "seller_name": seller_name,
         "seller_vat": seller_vat,
         "seller_country": seller_country,
-        "buyer_name": buyer_name,
-        "buyer_country": "NL",  # Dutch app/UI; a real address field is a later step.
+        **_buyer_party(buyer),
     }
 
 
