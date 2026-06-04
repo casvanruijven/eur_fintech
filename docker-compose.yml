@@ -1,0 +1,17 @@
+# Local PostgreSQL for ZZPay development.
+# Start with:  docker compose up -d
+services:
+  db:
+    image: postgres:16
+    container_name: zzpay-db
+    environment:
+      POSTGRES_USER: zzpay
+      POSTGRES_PASSWORD: zzpay
+      POSTGRES_DB: zzpay
+    ports:
+      - "5434:5432"          # host 5434 -> container 5432 (avoids clashing with a local Postgres)
+    volumes:
+      - zzpay_pgdata:/var/lib/postgresql/data
+
+volumes:
+  zzpay_pgdata:

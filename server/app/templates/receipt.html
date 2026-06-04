@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page { size: 80mm 200mm; margin: 6mm; }
+    body { font-family: "Helvetica", "Arial", sans-serif; color: #1a1a1a; font-size: 12px; }
+    .brand { font-size: 20px; font-weight: 700; color: #0d9488; letter-spacing: -0.5px; }
+    .muted { color: #6b7280; }
+    .merchant { margin-top: 10px; font-size: 15px; font-weight: 600; }
+    hr { border: none; border-top: 1px dashed #d1d5db; margin: 10px 0; }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 2px 0; vertical-align: top; }
+    td.r { text-align: right; white-space: nowrap; }
+    .totals td { padding: 3px 0; }
+    .grand { font-size: 14px; font-weight: 700; }
+    .footer { margin-top: 14px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="brand">ZZPay</div>
+  <div class="muted">Digitale kassabon</div>
+
+  <div class="merchant">{{ merchant_name }}</div>
+  {% if merchant_vat %}<div class="muted">BTW: {{ merchant_vat }}</div>{% endif %}
+  <div class="muted">{{ purchased_at }}</div>
+
+  <hr />
+
+  <table>
+    {% for item in line_items %}
+    <tr>
+      <td>{{ item.quantity }}&times; {{ item.description }}</td>
+      <td class="r">{{ currency }} {{ "%.2f"|format(item.unit_price|float) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <hr />
+
+  <table class="totals">
+    <tr><td class="muted">Subtotaal</td><td class="r">{{ currency }} {{ "%.2f"|format(subtotal) }}</td></tr>
+    <tr><td class="muted">BTW</td><td class="r">{{ currency }} {{ "%.2f"|format(vat_amount|float) }}</td></tr>
+    <tr class="grand"><td>Totaal</td><td class="r">{{ currency }} {{ "%.2f"|format(total_amount|float) }}</td></tr>
+  </table>
+
+  <div class="footer muted">
+    Bonnummer {{ receipt_id }}<br />
+    Bewaar deze bon voor je administratie
+  </div>
+</body>
+</html>

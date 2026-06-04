@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / Vite (client)
+node_modules/
+client/dist/
+client/.env
+*.local
+
+# OS / editor
+.DS_Store
+

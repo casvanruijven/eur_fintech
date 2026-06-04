@@ -1,0 +1,34 @@
+# ZZPay API — Python 3.12
+# Web framework + ASGI server (the [standard] extra pulls in uvicorn)
+fastapi[standard]>=0.115,<1.0
+
+# ORM (SQLModel = SQLAlchemy + Pydantic) and async Postgres driver
+sqlmodel>=0.0.22,<0.1
+asyncpg>=0.30,<1.0
+
+# Settings from environment / .env
+pydantic-settings>=2.5,<3.0
+# Validates EmailStr fields
+email-validator>=2.2,<3.0
+
+# Auth: JWT tokens + Argon2 password hashing
+PyJWT>=2.9,<3.0
+passlib[argon2]>=1.7.4,<2.0
+argon2-cffi>=23.1,<24.0
+
+# Receipt rendering (HTML template -> PDF/PNG) and email delivery.
+# Pure-Python / self-contained wheels so no native GTK libs are needed on Windows:
+#   xhtml2pdf renders the HTML template to PDF; pypdfium2 rasterises page 1 to PNG.
+jinja2>=3.1,<4.0
+xhtml2pdf>=0.2.16,<0.3
+pypdfium2>=4.30,<5.0
+aiosmtplib>=3.0,<4.0
+
+# Form parsing for the OAuth2 login form
+python-multipart>=0.0.9,<1.0
+
+# ---- Dev / test ----
+pytest>=8.3,<9.0
+pytest-asyncio>=0.24,<1.0
+httpx>=0.27,<1.0
+aiosqlite>=0.20,<1.0   # in-memory DB for the test suite (no Postgres needed)
