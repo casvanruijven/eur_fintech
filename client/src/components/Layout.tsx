@@ -1,17 +1,25 @@
-// App shell for authenticated pages: a top bar with the ZZPay logo, nav, and
-// logout, plus the routed page content below.
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { PiReceipt, PiSignOut, PiUserCircle } from "react-icons/pi";
+// App shell: a top bar with the ZZPay logo + public nav, and the routed page
+// below. There is no login wall — the account link simply reflects whether the
+// visitor is currently recognised on this device.
+import { Link, NavLink, Outlet } from "react-router-dom";
+import {
+  PiStorefront,
+  PiGlobeSimple,
+  PiReceipt,
+  PiUserCircle,
+  PiHouse,
+} from "react-icons/pi";
 import { useAuth } from "../auth";
 
-export function Layout() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
+const NAV = [
+  { to: "/", label: "Home", icon: PiHouse, end: true },
+  { to: "/merchant", label: "Merchant", icon: PiStorefront, end: false },
+  { to: "/online-checkout", label: "Online", icon: PiGlobeSimple, end: false },
+  { to: "/merchant/receipts", label: "Receipts", icon: PiReceipt, end: false },
+];
 
-  async function handleLogout() {
-    await logout();
-    navigate("/login");
-  }
+export function Layout() {
+  const { user } = useAuth();
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${
@@ -21,33 +29,34 @@ export function Layout() {
   return (
     <div className="min-h-full">
       <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-2 px-4 py-3">
           <Link to="/" className="text-xl font-bold tracking-tight text-brand">
             ZZPay
           </Link>
-          <nav className="flex items-center gap-1">
-            <NavLink to="/" end className={linkClass}>
-              <PiReceipt /> Bonnen
-            </NavLink>
+          <nav className="flex items-center gap-1 overflow-x-auto">
+            {NAV.map(({ to, label, icon: Icon, end }) => (
+              <NavLink key={to} to={to} end={end} className={linkClass}>
+                <Icon /> <span className="hidden sm:inline">{label}</span>
+              </NavLink>
+            ))}
             <NavLink to="/account" className={linkClass}>
-              <PiUserCircle /> Account
+              <PiUserCircle />{" "}
+              <span className="hidden sm:inline">
+                {user ? user.first_name : "Account"}
+              </span>
             </NavLink>
-            <button
-              onClick={handleLogout}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900"
-            >
-              <PiSignOut /> Uitloggen
-            </button>
           </nav>
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 py-6">
-        <p className="mb-4 text-sm text-gray-500">
-          Ingelogd als {user?.first_name} {user?.last_name}
-        </p>
+      <main className="mx-auto max-w-4xl px-4 py-6">
         <Outlet />
       </main>
+
+      <footer className="mx-auto max-w-4xl px-4 py-8 text-center text-xs text-gray-400">
+        ZZPay MVP — Tap. Done. Booked. · structured receipt data at the source ·
+        EN 16931-compatible
+      </footer>
     </div>
   );
 }

@@ -1,35 +1,105 @@
-// Typed API client. One axios instance with cookies enabled; a 401 interceptor
-// bounces the user back to the login page.
+// Typed API client. One axios instance with cookies enabled (for the optional
+// account/JWT). Receipts are public, so a 401 is NOT a redirect — it just means
+// "not logged in", which the UI handles by showing the account-gated actions as
+// a login prompt.
 import axios from "axios";
 
 export const http = axios.create({
   baseURL: "/api",
-  withCredentials: true, // send the httponly auth cookie
+  withCredentials: true, // send the optional auth cookie when present
 });
 
-http.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    const onAuthPage =
-      location.pathname === "/login" || location.pathname === "/register";
-    if (err?.response?.status === 401 && !onAuthPage) {
-      location.href = "/login";
-    }
-    return Promise.reject(err);
-  }
-);
-
 // Pull a human-readable message out of a FastAPI error response.
-export function apiError(err: unknown, fallback = "Er ging iets mis"): string {
+export function apiError(err: unknown, fallback = "Something went wrong"): string {
   if (axios.isAxiosError(err)) {
     const detail = err.response?.data?.detail;
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg;
   }
+  if (err instanceof Error) return err.message;
   return fallback;
 }
 
 // ---- Types ----
+export type Channel = "NFC" | "ONLINE_LINK";
+export type ReceiptStatus = "GENERATED" | "VIEWED" | "SENT" | "REFUNDED";
+export type CreditNoteStatus = "GENERATED" | "SENT";
+
+// Money fields arrive as strings (Decimal); the format helpers accept both.
+type Money = string | number;
+
+export interface InvoiceLine {
+  id: number;
+  description: string;
+  quantity: number;
+  unit_price: Money;
+  vat_rate: Money;
+  line_extension_amount: Money;
+  line_tax_total: Money;
+}
+
+export interface Receipt {
+  invoice_id: string;
+  issue_date: string;
+  issue_time: string;
+  currency: string;
+  channel: Channel;
+  supplier_name: string;
+  supplier_vat: string | null;
+  supplier_address: string;
+  supplier_country: string;
+  buyer_name: string;
+  buyer_email: string | null;
+  invoice_lines: InvoiceLine[];
+  line_extension_amount: Money;
+  tax_exclusive_amount: Money;
+  tax_inclusive_amount: Money;
+  payable_amount: Money;
+  tax_total: Money;
+  delivery_url: string;
+  status: ReceiptStatus;
+  sent_to_user_email: string | null;
+  sent_to_accountant_email: string | null;
+  sent_at: string | null;
+  credit_note_id: string | null;
+  created_at: string;
+}
+
+export interface CreditNote {
+  credit_note_id: string;
+  original_receipt_id: string;
+  issue_date: string;
+  issue_time: string;
+  currency: string;
+  credited_items: InvoiceLine[];
+  line_extension_amount: Money;
+  tax_exclusive_amount: Money;
+  tax_inclusive_amount: Money;
+  payable_amount: Money;
+  tax_total: Money;
+  reason: string;
+  status: CreditNoteStatus;
+  sent_to_user_email: string | null;
+  sent_to_accountant_email: string | null;
+  sent_at: string | null;
+  created_at: string;
+}
+
+export interface BasketLinePreview {
+  description: string;
+  quantity: number;
+  unit_price: string;
+  vat_rate: string;
+}
+export interface DemoBasket {
+  name: string;
+  vat: string;
+  address: string;
+  default_channel: Channel;
+  lines: BasketLinePreview[];
+  preview_total: string;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -39,35 +109,7 @@ export interface User {
   created_at: string;
 }
 
-export interface LineItem {
-  description: string;
-  quantity: number;
-  unit_price: number | string;
-}
-
-export interface Receipt {
-  id: string;
-  merchant_name: string;
-  merchant_vat: string | null;
-  purchased_at: string;
-  total_amount: string;
-  vat_amount: string;
-  currency: string;
-  line_items: LineItem[];
-  created_at: string;
-}
-
-export interface ReceiptCreate {
-  merchant_name: string;
-  merchant_vat?: string | null;
-  purchased_at: string;
-  total_amount: string;
-  vat_amount: string;
-  currency?: string;
-  line_items?: LineItem[];
-}
-
-// ---- Auth ----
+// ---- Account (optional) ----
 export async function register(body: {
   email: string;
   first_name: string;
@@ -103,9 +145,20 @@ export async function updateMe(body: {
   return data;
 }
 
+// ---- Checkout (the merchant source) ----
+export async function getDemoBaskets(): Promise<Record<string, DemoBasket>> {
+  const { data } = await http.get<Record<string, DemoBasket>>("/checkout/demo-baskets");
+  return data;
+}
+
+export async function checkout(merchant_key: string, channel: Channel): Promise<Receipt> {
+  const { data } = await http.post<Receipt>("/checkout", { merchant_key, channel });
+  return data;
+}
+
 // ---- Receipts ----
-export async function listReceipts(): Promise<Receipt[]> {
-  const { data } = await http.get<Receipt[]>("/receipts");
+export async function listReceipts(mine = false): Promise<Receipt[]> {
+  const { data } = await http.get<Receipt[]>("/receipts", { params: mine ? { mine: true } : {} });
   return data;
 }
 
@@ -114,19 +167,36 @@ export async function getReceipt(id: string): Promise<Receipt> {
   return data;
 }
 
-export async function createReceipt(body: ReceiptCreate): Promise<Receipt> {
-  const { data } = await http.post<Receipt>("/receipts", body);
+export async function emailReceiptToSelf(id: string): Promise<{ detail: string }> {
+  const { data } = await http.post(`/receipts/${id}/email`, {});
   return data;
 }
 
-export async function emailReceipt(
+export async function sendToAccountant(id: string): Promise<{ detail: string }> {
+  const { data } = await http.post(`/receipts/${id}/send-to-accountant`);
+  return data;
+}
+
+// ---- Refund / credit note ----
+export async function refundReceipt(
   id: string,
-  target: "self" | "accountant"
-): Promise<{ detail: string }> {
-  const { data } = await http.post(`/receipts/${id}/email`, { target });
+  body: { full?: boolean; line_ids?: number[]; reason?: string }
+): Promise<{ credit_note: CreditNote; warning: string | null }> {
+  const { data } = await http.post(`/receipts/${id}/refund`, body);
   return data;
 }
 
-// Download URLs hit the proxied API directly (cookie is sent automatically).
+export async function getCreditNote(id: string): Promise<CreditNote> {
+  const { data } = await http.get<CreditNote>(`/credit-notes/${id}`);
+  return data;
+}
+
+// ---- Download URLs (hit the proxied API; the cookie rides along) ----
 export const pdfUrl = (id: string) => `/api/receipts/${id}/pdf`;
 export const pngUrl = (id: string) => `/api/receipts/${id}/png`;
+export const jsonUrl = (id: string) => `/api/receipts/${id}/json`;
+export const ublUrl = (id: string) => `/api/receipts/${id}/ubl`;
+export const creditNotePdfUrl = (id: string) => `/api/credit-notes/${id}/pdf`;
+export const creditNotePngUrl = (id: string) => `/api/credit-notes/${id}/png`;
+export const creditNoteJsonUrl = (id: string) => `/api/credit-notes/${id}/json`;
+export const creditNoteUblUrl = (id: string) => `/api/credit-notes/${id}/ubl`;

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from app.models import Receipt
+from app.models import CreditNote, Receipt
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _env = Environment(
@@ -22,43 +22,76 @@ _env = Environment(
 )
 
 
+_CHANNEL_LABELS = {"NFC": "NFC tap", "ONLINE_LINK": "Online link"}
+
+
 def _render_html(receipt: Receipt) -> str:
-    items = receipt.line_items or []
-    subtotal = float(receipt.total_amount) - float(receipt.vat_amount)
     template = _env.get_template("receipt.html")
     return template.render(
-        receipt_id=str(receipt.id)[:8],
-        merchant_name=receipt.merchant_name,
-        merchant_vat=receipt.merchant_vat,
-        purchased_at=receipt.purchased_at.strftime("%d-%m-%Y %H:%M"),
+        invoice_id=receipt.invoice_id,
+        supplier_name=receipt.supplier_name,
+        supplier_vat=receipt.supplier_vat,
+        supplier_address=receipt.supplier_address,
+        issue_date=receipt.issue_date,
+        issue_time=receipt.issue_time,
+        channel_label=_CHANNEL_LABELS.get(receipt.channel, receipt.channel),
         currency=receipt.currency,
-        line_items=items,
-        subtotal=subtotal,
-        vat_amount=receipt.vat_amount,
-        total_amount=receipt.total_amount,
+        line_items=receipt.invoice_lines or [],
+        line_extension_amount=receipt.line_extension_amount,
+        tax_total=receipt.tax_total,
+        payable_amount=receipt.payable_amount,
+        status=receipt.status,
+        credit_note_id=receipt.credit_note_id,
     )
 
 
-def render_pdf(receipt: Receipt) -> bytes:
+def _render_cn_html(cn: CreditNote, original: Receipt) -> str:
+    template = _env.get_template("credit_note.html")
+    return template.render(
+        credit_note_id=cn.credit_note_id,
+        original_receipt_id=cn.original_receipt_id,
+        supplier_name=original.supplier_name,
+        supplier_vat=original.supplier_vat,
+        issue_date=cn.issue_date,
+        issue_time=cn.issue_time,
+        currency=cn.currency,
+        line_items=cn.credited_items or [],
+        line_extension_amount=cn.line_extension_amount,
+        tax_total=cn.tax_total,
+        payable_amount=cn.payable_amount,
+        reason=cn.reason,
+        status=cn.status,
+    )
+
+
+def _pdf_from_html(html: str) -> bytes:
     # Imported lazily so importing this module stays cheap for non-render code
     # paths (e.g. the test suite, which skips the binary endpoints).
     from xhtml2pdf import pisa
 
     out = io.BytesIO()
-    result = pisa.CreatePDF(src=_render_html(receipt), dest=out, encoding="utf-8")
+    result = pisa.CreatePDF(src=html, dest=out, encoding="utf-8")
     if result.err:
         raise RuntimeError(f"PDF rendering failed ({result.err} error(s))")
     return out.getvalue()
 
 
-def render_png(receipt: Receipt, scale: float = 3.0) -> bytes:
-    # PNG is the same document rasterised: render to PDF, then draw page 1 to a
-    # bitmap with pypdfium2 and trim the surrounding page margin so the image
-    # hugs the receipt instead of carrying the full (tall) page whitespace.
+def render_pdf(receipt: Receipt) -> bytes:
+    return _pdf_from_html(_render_html(receipt))
+
+
+def render_credit_note_pdf(cn: CreditNote, original: Receipt) -> bytes:
+    return _pdf_from_html(_render_cn_html(cn, original))
+
+
+def _png_from_pdf(pdf_bytes: bytes, scale: float = 3.0) -> bytes:
+    # PNG is the same document rasterised: draw page 1 to a bitmap with pypdfium2
+    # and trim the surrounding page margin so the image hugs the document instead
+    # of carrying the full (tall) page whitespace.
     import pypdfium2 as pdfium
     from PIL import Image, ImageChops
 
-    pdf = pdfium.PdfDocument(render_pdf(receipt))
+    pdf = pdfium.PdfDocument(pdf_bytes)
     try:
         image = pdf[0].render(scale=scale).to_pil().convert("RGB")
     finally:
@@ -83,7 +116,18 @@ def render_png(receipt: Receipt, scale: float = 3.0) -> bytes:
     return out.getvalue()
 
 
+def render_png(receipt: Receipt, scale: float = 3.0) -> bytes:
+    return _png_from_pdf(render_pdf(receipt), scale)
+
+
+def render_credit_note_png(cn: CreditNote, original: Receipt, scale: float = 3.0) -> bytes:
+    return _png_from_pdf(render_credit_note_pdf(cn, original), scale)
+
+
 def receipt_filename(receipt: Receipt, ext: str) -> str:
-    safe_merchant = "".join(c for c in receipt.merchant_name if c.isalnum() or c in " -_").strip()
-    date = receipt.purchased_at.strftime("%Y%m%d")
-    return f"zzpay-{safe_merchant or 'bon'}-{date}.{ext}".replace(" ", "_")
+    # invoice_id is unique and filesystem-safe (e.g. "ZZP-2026-0001").
+    return f"zzpay-{receipt.invoice_id}.{ext}"
+
+
+def credit_note_filename(cn: CreditNote, ext: str) -> str:
+    return f"zzpay-{cn.credit_note_id}.{ext}"

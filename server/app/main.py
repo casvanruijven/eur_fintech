@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import seed
 from app.config import settings
 from app.database import init_db
-from app.routers import receipts, users
+from app.routers import checkout, receipts, refunds, users
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,8 +35,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# The optional account (login / accountant config). Receipts are public — the
+# account only unlocks structured export + emailing.
 app.include_router(users.router)
+# Merchant checkout (the source), public receipts + exports, and refund credit notes.
+app.include_router(checkout.router)
 app.include_router(receipts.router)
+app.include_router(refunds.router)
 
 
 @app.get("/api/health", tags=["health"])

@@ -1,45 +1,27 @@
+// All routes are public — the whole point of ZZPay is "no app, no login" receipt
+// access. The optional account only unlocks structured export + emailing, handled
+// inside the receipt actions, not by gating whole pages.
 import { Navigate, Route, Routes } from "react-router-dom";
-import { useAuth } from "./auth";
 import { Layout } from "./components/Layout";
-import { Spinner } from "./components/Spinner";
-import { Login } from "./pages/Login";
-import { Register } from "./pages/Register";
-import { Receipts } from "./pages/Receipts";
-import { ReceiptDetail } from "./pages/ReceiptDetail";
+import { Landing } from "./pages/Landing";
+import { MerchantCheckout } from "./pages/MerchantCheckout";
+import { MerchantReceipts } from "./pages/MerchantReceipts";
+import { OnlineCheckout } from "./pages/OnlineCheckout";
+import { ReceiptView } from "./pages/ReceiptView";
 import { Account } from "./pages/Account";
-import type { ReactNode } from "react";
-
-// Gate for authenticated routes: wait for the auth check, then either render or
-// redirect to the login page.
-function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Spinner className="text-3xl" />
-      </div>
-    );
-  }
-  return user ? <>{children}</> : <Navigate to="/login" replace />;
-}
 
 export function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route
-        element={
-          <RequireAuth>
-            <Layout />
-          </RequireAuth>
-        }
-      >
-        <Route path="/" element={<Receipts />} />
-        <Route path="/receipts/:id" element={<ReceiptDetail />} />
+      <Route element={<Layout />}>
+        <Route path="/" element={<Landing />} />
+        <Route path="/merchant" element={<MerchantCheckout />} />
+        <Route path="/merchant/receipts" element={<MerchantReceipts />} />
+        <Route path="/online-checkout" element={<OnlineCheckout />} />
+        <Route path="/receipt/:id" element={<ReceiptView />} />
         <Route path="/account" element={<Account />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

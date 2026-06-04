@@ -2,7 +2,8 @@
 
 For this MVP we keep schema management simple: ``init_db()`` creates any missing
 tables from the SQLModel metadata on startup. A production version would swap
-this for proper migrations (Alembic) — see HANDOFF.md.
+this for proper migrations (Alembic). Because there are no migrations, a schema
+change to an existing dev DB needs a reset: ``docker compose down -v && up -d``.
 """
 
 from collections.abc import AsyncGenerator

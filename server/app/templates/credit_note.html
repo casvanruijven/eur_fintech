@@ -7,27 +7,26 @@
     body { font-family: "Helvetica", "Arial", sans-serif; color: #1a1a1a; font-size: 12px; }
     .brand { font-size: 20px; font-weight: 700; color: #0d9488; letter-spacing: -0.5px; }
     .muted { color: #6b7280; }
-    .badge { display: inline-block; font-size: 10px; font-weight: 600; color: #0f766e;
-             border: 1px solid #99f6e4; background: #f0fdfa; border-radius: 10px; padding: 1px 7px; }
+    .badge { display: inline-block; font-size: 10px; font-weight: 600; color: #b91c1c;
+             border: 1px solid #fecaca; background: #fef2f2; border-radius: 10px; padding: 1px 7px; }
     .doc { margin-top: 10px; font-size: 15px; font-weight: 600; }
     hr { border: none; border-top: 1px dashed #d1d5db; margin: 10px 0; }
     table { width: 100%; border-collapse: collapse; }
     td { padding: 2px 0; vertical-align: top; }
     td.r { text-align: right; white-space: nowrap; }
     .totals td { padding: 3px 0; }
-    .grand { font-size: 14px; font-weight: 700; }
+    .grand { font-size: 14px; font-weight: 700; color: #b91c1c; }
     .footer { margin-top: 14px; text-align: center; }
   </style>
 </head>
 <body>
   <div class="brand">ZZPay</div>
-  <div class="muted">Digital receipt &middot; structured at the source</div>
+  <div><span class="badge">CREDIT NOTE</span></div>
 
   <div class="doc">{{ supplier_name }}</div>
   {% if supplier_vat %}<div class="muted">VAT: {{ supplier_vat }}</div>{% endif %}
-  <div class="muted">{{ supplier_address }}</div>
   <div class="muted">{{ issue_date }} {{ issue_time }}</div>
-  <div style="margin-top:6px"><span class="badge">{{ channel_label }}</span></div>
+  <div class="muted">Correction of receipt {{ original_receipt_id }}</div>
 
   <hr />
 
@@ -38,7 +37,7 @@
         {{ item.quantity }}&times; {{ item.description }}<br />
         <span class="muted">incl. {{ "%.0f"|format(item.vat_rate|float * 100) }}% VAT</span>
       </td>
-      <td class="r">{{ currency }} {{ "%.2f"|format(item.line_extension_amount|float + item.line_tax_total|float) }}</td>
+      <td class="r">&minus; {{ currency }} {{ "%.2f"|format(item.line_extension_amount|float + item.line_tax_total|float) }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -46,15 +45,15 @@
   <hr />
 
   <table class="totals">
-    <tr><td class="muted">Subtotal (excl. VAT)</td><td class="r">{{ currency }} {{ "%.2f"|format(line_extension_amount|float) }}</td></tr>
-    <tr><td class="muted">VAT</td><td class="r">{{ currency }} {{ "%.2f"|format(tax_total|float) }}</td></tr>
-    <tr class="grand"><td>Total</td><td class="r">{{ currency }} {{ "%.2f"|format(payable_amount|float) }}</td></tr>
+    <tr><td class="muted">Credited (excl. VAT)</td><td class="r">&minus; {{ currency }} {{ "%.2f"|format(line_extension_amount|float) }}</td></tr>
+    <tr><td class="muted">VAT</td><td class="r">&minus; {{ currency }} {{ "%.2f"|format(tax_total|float) }}</td></tr>
+    <tr class="grand"><td>Refund total</td><td class="r">&minus; {{ currency }} {{ "%.2f"|format(payable_amount|float) }}</td></tr>
   </table>
 
   <div class="footer muted">
-    Receipt {{ invoice_id }} &middot; status: {{ status }}<br />
-    {% if credit_note_id %}Linked credit note: {{ credit_note_id }}<br />{% endif %}
-    EN 16931-compatible structured receipt &middot; keep for your bookkeeping
+    Credit note {{ credit_note_id }} &middot; status: {{ status }}<br />
+    Reason: {{ reason }}<br />
+    EN 16931-compatible credit note &middot; the original receipt remains valid
   </div>
 </body>
 </html>

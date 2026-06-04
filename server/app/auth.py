@@ -64,22 +64,38 @@ def _extract_token(request: Request) -> str | None:
     return None
 
 
+async def _user_from_request(request: Request, session: AsyncSession) -> User | None:
+    """Resolve the user from the cookie/header token, or None if not (validly) authed."""
+    token = _extract_token(request)
+    if not token:
+        return None
+    payload = _decode_token(token)
+    if payload is None or "sub" not in payload:
+        return None
+    return await session.get(User, UUID(payload["sub"]))
+
+
 async def get_current_user(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> User:
-    token = _extract_token(request)
-    if not token:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-
-    payload = _decode_token(token)
-    if payload is None or "sub" not in payload:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
-
-    user = await session.get(User, UUID(payload["sub"]))
+    """Strict dependency: 401 when there is no valid, current account."""
+    user = await _user_from_request(request, session)
     if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     return user
+
+
+async def get_current_user_optional(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> User | None:
+    """Lenient dependency: returns the user if logged in, else None.
+
+    Public receipt pages use this to *detect* a logged-in account (to show the
+    e-invoice/email actions and link the receipt) without forcing a login.
+    """
+    return await _user_from_request(request, session)
 
 
 # Cookie attributes are shared by login (set) and logout (clear).
@@ -93,3 +109,4 @@ def cookie_kwargs() -> dict:
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalUser = Annotated[User | None, Depends(get_current_user_optional)]

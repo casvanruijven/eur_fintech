@@ -1,83 +1,86 @@
-"""Receipts: the user's bonnetjes, plus download (PDF/PNG) and email delivery.
+"""Receipts — the public infrastructure layer + the account-gated e-invoice tools.
 
-Every endpoint is scoped to the authenticated user — ownership is enforced
-server-side, never trusting the client to say which receipts are "theirs".
+Two tiers (the spine of the MVP):
+
+* **Anyone, no login** — open a receipt by its URL, and download the human-readable
+  **PDF / PNG**. This is "no app, no scanning, no account": tap the NFC tile or the
+  online link and the receipt is just *there* in the browser.
+* **Logged-in account holders** — additionally export the **structured JSON** and the
+  **EN 16931 UBL** e-invoice, **email** the receipt to themselves, and **send it to
+  their accountant** (PDF + UBL). A compliant e-invoice needs a *buyer* identity, so
+  these legitimately require an account. The first such action also **links** the
+  receipt to that user (``user_id``), so it shows up under their expenses.
 """
 
+import json
+from datetime import datetime, timezone
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.auth import CurrentUser
+from app.auth import CurrentUser, OptionalUser
 from app.database import get_session
+from app.einvoice import receipt_to_einvoice_dict
 from app.email import send_receipt_email
-from app.models import (
-    EmailReceiptRequest,
-    Receipt,
-    ReceiptCreate,
-    ReceiptOut,
-    User,
-)
+from app.models import EmailRequest, Receipt, ReceiptOut, ReceiptStatus, User
 from app.pdf import receipt_filename, render_pdf, render_png
+from app.ubl import UblComplianceError, render_ubl
 
 router = APIRouter(prefix="/api/receipts", tags=["receipts"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-async def _owned_receipt(receipt_id: UUID, user: User, session: AsyncSession) -> Receipt:
-    """Load a receipt and 404 if it doesn't exist or isn't the caller's."""
-    receipt = await session.get(Receipt, receipt_id)
-    if receipt is None or receipt.user_id != user.id:
+async def _get_receipt(invoice_id: str, session: AsyncSession) -> Receipt:
+    receipt = await session.get(Receipt, invoice_id)
+    if receipt is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Receipt not found")
     return receipt
 
 
+def _link_to_user(receipt: Receipt, user: User) -> None:
+    """Claim an ownerless receipt for the acting user (so it becomes their expense)."""
+    if receipt.user_id is None:
+        receipt.user_id = user.id
+
+
+def _ubl_or_422(receipt: Receipt, user: User) -> bytes:
+    try:
+        return render_ubl(receipt, buyer=user)
+    except UblComplianceError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# Public — view + human-readable downloads (no login)
+# --------------------------------------------------------------------------- #
 @router.get("", response_model=list[ReceiptOut])
-async def list_receipts(user: CurrentUser, session: SessionDep) -> list[Receipt]:
-    result = await session.execute(
-        select(Receipt)
-        .where(Receipt.user_id == user.id)
-        .order_by(Receipt.purchased_at.desc())
-    )
+async def list_receipts(
+    session: SessionDep, user: OptionalUser, mine: bool = False
+) -> list[Receipt]:
+    """List receipts. The merchant dashboard lists all; ``?mine=true`` (logged in)
+    lists only the caller's linked receipts (their expenses)."""
+    query = select(Receipt).order_by(Receipt.created_at.desc())
+    if mine and user is not None:
+        query = query.where(Receipt.user_id == user.id)
+    result = await session.execute(query)
     return list(result.scalars().all())
 
 
-@router.get("/{receipt_id}", response_model=ReceiptOut)
-async def get_receipt(receipt_id: UUID, user: CurrentUser, session: SessionDep) -> Receipt:
-    return await _owned_receipt(receipt_id, user, session)
-
-
-@router.post("", response_model=ReceiptOut, status_code=status.HTTP_201_CREATED)
-async def create_receipt(
-    body: ReceiptCreate, user: CurrentUser, session: SessionDep
-) -> Receipt:
-    """Manual / mock receipt creation — the v1 ingestion path.
-
-    In production this is where a merchant's till (via the NFC tap) would POST
-    the transaction; for the MVP we accept the same structured payload directly.
-    """
-    receipt = Receipt(
-        user_id=user.id,
-        merchant_name=body.merchant_name,
-        merchant_vat=body.merchant_vat,
-        purchased_at=body.purchased_at,
-        total_amount=body.total_amount,
-        vat_amount=body.vat_amount,
-        currency=body.currency,
-        line_items=[item.model_dump(mode="json") for item in body.line_items],
-    )
-    session.add(receipt)
-    await session.flush()
+@router.get("/{invoice_id}", response_model=ReceiptOut)
+async def get_receipt(invoice_id: str, session: SessionDep) -> Receipt:
+    receipt = await _get_receipt(invoice_id, session)
+    # Demo telemetry: first open flips GENERATED -> VIEWED. Never downgrade SENT/REFUNDED.
+    if receipt.status == ReceiptStatus.GENERATED.value:
+        receipt.status = ReceiptStatus.VIEWED.value
     return receipt
 
 
-@router.get("/{receipt_id}/pdf")
-async def download_pdf(receipt_id: UUID, user: CurrentUser, session: SessionDep) -> Response:
-    receipt = await _owned_receipt(receipt_id, user, session)
+@router.get("/{invoice_id}/pdf")
+async def download_pdf(invoice_id: str, session: SessionDep) -> Response:
+    receipt = await _get_receipt(invoice_id, session)
     return Response(
         content=render_pdf(receipt),
         media_type="application/pdf",
@@ -85,9 +88,9 @@ async def download_pdf(receipt_id: UUID, user: CurrentUser, session: SessionDep)
     )
 
 
-@router.get("/{receipt_id}/png")
-async def download_png(receipt_id: UUID, user: CurrentUser, session: SessionDep) -> Response:
-    receipt = await _owned_receipt(receipt_id, user, session)
+@router.get("/{invoice_id}/png")
+async def download_png(invoice_id: str, session: SessionDep) -> Response:
+    receipt = await _get_receipt(invoice_id, session)
     return Response(
         content=render_png(receipt),
         media_type="image/png",
@@ -95,27 +98,74 @@ async def download_png(receipt_id: UUID, user: CurrentUser, session: SessionDep)
     )
 
 
-@router.post("/{receipt_id}/email")
-async def email_receipt(
-    receipt_id: UUID,
-    body: EmailReceiptRequest,
-    user: CurrentUser,
-    session: SessionDep,
+# --------------------------------------------------------------------------- #
+# Account-gated — structured exports + email (login required)
+# --------------------------------------------------------------------------- #
+@router.get("/{invoice_id}/json")
+async def download_json(invoice_id: str, user: CurrentUser, session: SessionDep) -> Response:
+    receipt = await _get_receipt(invoice_id, session)
+    _link_to_user(receipt, user)
+    body = json.dumps(receipt_to_einvoice_dict(receipt), indent=2)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "json")}"'},
+    )
+
+
+@router.get("/{invoice_id}/ubl")
+async def download_ubl(invoice_id: str, user: CurrentUser, session: SessionDep) -> Response:
+    receipt = await _get_receipt(invoice_id, session)
+    receipt.buyer_name = f"{user.first_name} {user.last_name}".strip()
+    receipt.buyer_email = user.email
+    _link_to_user(receipt, user)
+    content = _ubl_or_422(receipt, user)
+    return Response(
+        content=content,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{receipt_filename(receipt, "xml")}"'},
+    )
+
+
+async def _email_receipt(invoice_id: str, to: str, user: User, session: AsyncSession) -> dict:
+    receipt = await _get_receipt(invoice_id, session)
+    receipt.buyer_name = f"{user.first_name} {user.last_name}".strip()
+    receipt.buyer_email = user.email
+    _link_to_user(receipt, user)
+    # send_receipt_email builds the UBL too; surface compliance errors as 422.
+    try:
+        result = await send_receipt_email(to, receipt, buyer=user)
+    except UblComplianceError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+
+    now = datetime.now(timezone.utc)
+    receipt.sent_at = now
+    if to == user.email:
+        receipt.sent_to_user_email = to
+    else:
+        receipt.sent_to_accountant_email = to
+    if receipt.status != ReceiptStatus.REFUNDED.value:
+        receipt.status = ReceiptStatus.SENT.value
+    return {"detail": f"Receipt {receipt.invoice_id} sent to {to}", "delivery": result}
+
+
+@router.post("/{invoice_id}/email")
+async def email_to_self(
+    invoice_id: str, body: EmailRequest, user: CurrentUser, session: SessionDep
 ) -> dict:
-    """Email the receipt PDF. Defaults to the user, or their accountant."""
-    receipt = await _owned_receipt(receipt_id, user, session)
+    """Email the receipt (PDF + UBL) to the logged-in user (or an override address)."""
+    to = body.to or user.email
+    return await _email_receipt(invoice_id, to, user, session)
 
-    to = body.to
-    if to is None:
-        if body.target == "accountant":
-            if not user.accountant_email:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "No accountant email on file — add one on your account page.",
-                )
-            to = user.accountant_email
-        else:
-            to = user.email
 
-    await send_receipt_email(to, receipt, sender=user)
-    return {"detail": f"Receipt sent to {to}"}
+@router.post("/{invoice_id}/send-to-accountant")
+async def send_to_accountant(
+    invoice_id: str, user: CurrentUser, session: SessionDep
+) -> dict:
+    """Forward the receipt (PDF + UBL) to the accountant configured on the account."""
+    if not user.accountant_email:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No accountant email on file — add one on your account page.",
+        )
+    return await _email_receipt(invoice_id, user.accountant_email, user, session)
