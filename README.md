@@ -12,6 +12,13 @@ This repository is the **MVP** built for **FinTech Assignment 2**. It is deliber
 demo-ready: it proves the core value-enhancing process in working code, before any expensive POS or
 Peppol integrations.
 
+## Team & how we worked
+
+ZZPay was built by Cas van Ruijven, Martijn van der Pijl and David Kloet. We made it together in
+live sessions on one laptop, so all commits are under Cas his account. We made all the design,
+architecture and review choices together. You can read more about how we used the AI agents in
+[`docs/ai-orchestration.md`](docs/ai-orchestration.md).
+
 ---
 
 ## 1. Assignment context
