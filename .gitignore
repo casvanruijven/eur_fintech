@@ -221,6 +221,11 @@ __marimo__/
 node_modules/
 client/dist/
 client/.env
+
+# The Python `lib/` rule above also matches client/src/lib — re-include the
+# frontend lib SOURCE so it actually ships in the repo (it must, or the build fails).
+!client/src/lib/
+!client/src/lib/**
 *.local
 
 # OS / editor
