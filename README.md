@@ -216,14 +216,3 @@ docs/              architecture, assignment-mapping, einvoice-standard, refund-f
 ## 13. License
 
 Educational project for FinTech Assignment 2. © the ZZPay team. No warranty; not for production use.
-
----
-
-### Suggested GitHub metadata
-
-**Description:** ZZPay MVP — tap an NFC tile or open a link, get a structured receipt in the browser
-with no app or login; export an EN 16931 UBL e-invoice, email your accountant, and refund via
-auditable credit notes. FastAPI + React.
-
-**Topics:** `fintech` `einvoicing` `en16931` `ubl` `peppol` `receipts` `zzp` `fastapi` `react`
-`typescript` `postgresql` `mvp`
